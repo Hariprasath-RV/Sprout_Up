@@ -1,0 +1,1331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SproutUP - Daily Insights for Tomorrow's Yield</title>
+    <!-- Tailwind CSS CDN for modern aesthetics -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Firebase Modules (v11.6.1) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, getDoc, query, where, getDocs, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // --- Global Variables and Firebase Setup ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-agri-app';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? __firebase_config : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        let app, db, auth, userId = null; 
+        let farmerData = null; 
+        let currentMobile = null; 
+        let authReady = false;
+        let currentView = 'dashboard'; 
+        let currentMarketData = null; 
+
+        // Public collection path, keyed by mobile number for lookup
+        const FARMER_COLLECTION_PATH = (mobile) => `artifacts/${appId}/public/data/farmerProfiles/${mobile}`;
+
+
+        // --- Core Application Data ---
+        const TN_DISTRICTS = [
+            'Coimbatore', 'Madurai', 'Erode', 'Trichy', 'Salem', 'Chennai', 
+            'Thanjavur', 'Tirunelveli', 'Kanyakumari', 'Dindigul', 'Namakkal', 
+            'Villupuram', 'Krishnagiri', 'Tiruvannamalai'
+        ];
+
+        const CROP_OPTIONS = [
+            'Tomato', 'Paddy', 'Onion', 'Cotton', 'Chilli', 'Groundnut', 
+            'Sugarcane', 'Banana', 'Turmeric', 'Mango', 'Coconut'
+        ];
+        
+        const CROP_BASES = {
+            'Tomato': { base: 35, harvest: '2025-11-15' }, 'Paddy': { base: 22, harvest: '2025-12-20' }, 
+            'Onion': { base: 40, harvest: '2025-10-28' }, 'Cotton': { base: 75, harvest: '2026-01-05' }, 
+            'Chilli': { base: 140, harvest: '2026-02-10' }, 'Groundnut': { base: 65, harvest: '2025-12-05' },
+            'Sugarcane': { base: 4.5, harvest: '2026-03-01' }, 'Banana': { base: 18, harvest: '2025-11-01' },
+            'Turmeric': { base: 95, harvest: '2026-01-25' }, 'Mango': { base: 60, harvest: '2026-04-10' },
+            'Coconut': { base: 30, harvest: '2025-12-15' }, 
+        };
+        
+        // --- I18n Content (Tamil/English) ---
+        const I18N = {
+            en: {
+                title: "SproutUP", 
+                moto: "Daily Insights for Tomorrow's Yield", // NEW MOTO
+                name: "Farmer Name", contact: "Mobile Number", crop_type: "Crop Type", region: "Region/Village (Tamil Nadu Districts)", required_field: "All fields are required.", 
+                dashboard_h: "Prediction Dashboard", welcome: "Welcome back", user_id: "User ID",
+                
+                // Navigation/Menu
+                menu_dashboard: "Dashboard", menu_schemes: "Govt. Schemes", menu_rewards: "Smart Farmers Rewards", menu_profile: "Edit Profile",
+                
+                // Login/Registration
+                login_subtext: "Please login with your Mobile Number and Password to access personalized market advice.",
+                login_mobile: "Mobile Number",
+                login_pass: "Password",
+                login_note: "New user? Click below to Register.",
+                login_register_link: "Don't have an account? Register here.",
+                login_btn: "Login to Dashboard",
+                login_required_fields: "Mobile Number and Password are required.",
+                login_invalid_credentials: "Invalid mobile number or password.",
+                login_success: "Login successful! Loading dashboard...",
+                login_failed: "Login failed. Please try again.",
+                
+                register_h: "New Farmer Registration",
+                register_mobile: "Mobile Number (Used for Login)",
+                register_pass: "Password (Min 6 characters)",
+                register_pass_placeholder: "min 6 characters",
+                register_btn: "Register & Login",
+                register_success: "Registration successful! Redirecting to Dashboard.",
+                register_error_exists: "Account with this mobile number already exists. Please log in.",
+                register_error: "Registration failed. Please try again.",
+                update_btn: "Update Profile",
+                
+                logout: "Logout", logout_success: "Logout successful!",
+
+                // Rewards Content
+                rewards_h: "Smart Farmers Rewards & Daily Check-in",
+                checkin_btn: "Check-in Now (+50 Coins)",
+                checkin_done: "Checked In! Come back tomorrow.",
+                checkin_success: "Daily check-in successful! +50 Coins added.",
+                checkin_error: "Check-in failed. Please try again.",
+                claim_btn: "Claim ₹100 Reward (1000 Coins)",
+                claim_success: "Successfully claimed ₹%s! Coins deducted.",
+                claim_error_min: "Not enough coins. Minimum 1000 coins required to claim.",
+                
+                // Schemes Content
+                schemes_h: "Government Schemes for Farmers",
+                schemes_intro: "Access central and state government schemes tailored for Tamil Nadu agriculture.",
+                scheme1_title: "Precision Farming Subsidy (State)",
+                scheme1_desc: "Get up to 50% subsidy on micro-irrigation systems, including drip and sprinkler sets.",
+                scheme2_title: "Crop Insurance Scheme (Central)",
+                scheme2_desc: "Insure your main crops against natural calamities, ensuring financial stability.",
+                scheme3_title: "Farm Mechanization Aid (State)",
+                scheme3_desc: "Financial assistance for purchasing tractors, power tillers, and other farm machinery.",
+                
+                // Dashboard 
+                current_price: "Current Market Price Details for %s", farmer_price: "Farmer Selling Price (Per Kg)", best_region: "Highest Price Region Nearby", prediction_h: "Price Prediction & Advice", price_history: "30-Day Price History", consultation: "Request 1-on-1 Consultation", loading: "Fetching Real-Time ML Data...", harvest_date: "Estimated Harvest Date:", market_trends: "Market Trends (Last 24 Hrs)", top_gainer: "Top Gaining Crop", top_loser: "Top Losing Crop", wait: "WAIT", sell: "SELL NOW", hold: "HOLD", wait_advice: "The predicted price shows an upward trend. Wait for 2-3 more days to maximize profit.", sell_advice: "The predicted price is peaking today. Consider selling now before the trend changes.", hold_advice: "The market is stable. Monitor closely or sell small batches.", reload_app: "Reload App", live_preview: "Live Market Preview (ML Based)", live_price: "Current Price Range (Per Kg)", select_crop: "Select Crop", select_region: "Select Region",
+                chart_tooltip: "Day %d: ₹%s", live_commodity: "Live Commodity Prices", gauge_advice: "Prediction Strength",
+            },
+            ta: {
+                title: "ஸ்ப்ரவுட்அப்", 
+                moto: "நாளை விளைச்சலுக்கான தினசரி நுண்ணறிவு", 
+                name: "விவசாயி பெயர்", contact: "கைபேசி எண்", crop_type: "பயிர் வகை", region: "பகுதி/கிராமம் (தமிழ்நாடு மாவட்டங்கள்)", required_field: "அனைத்து துறைகளும் தேவை.", 
+                dashboard_h: "முன்னறிவிப்பு பலகை", welcome: "மீண்டும் வருக", user_id: "பயனர் ஐடி",
+
+                // Navigation/Menu
+                menu_dashboard: "முன்னறிவிப்பு", menu_schemes: "அரசு மானியங்கள்", menu_rewards: "ஸ்மார்ட் விவசாயிகள் வெகுமதிகள்", menu_profile: "சுயவிவரம் திருத்து",
+                
+                // Login/Registration
+                login_subtext: "தனிப்பயனாக்கப்பட்ட சந்தை ஆலோசனையை அணுக உங்கள் கைபேசி எண் மற்றும் கடவுச்சொல்லைப் பயன்படுத்தி உள்நுழையவும்.",
+                login_mobile: "கைபேசி எண்",
+                login_pass: "கடவுச்சொல்",
+                login_note: "புதிய பயனரா? பதிவு செய்ய கீழே கிளிக் செய்யவும்.",
+                login_register_link: "கணக்கு இல்லையா? இங்கே பதிவு செய்யவும்.",
+                login_btn: "பலகத்திற்கு உள்நுழைக",
+                login_required_fields: "கைபேசி எண் மற்றும் கடவுச்சொல் தேவை.",
+                login_invalid_credentials: "தவறான கைபேசி எண் அல்லது கடவுச்சொல்.",
+                login_success: "உள்நுழைவு வெற்றிகரம்! பலகத்தை ஏற்றுகிறது...",
+                login_failed: "உள்நுழைவு தோல்வியடைந்தது. மீண்டும் முயற்சிக்கவும்.",
+
+                register_h: "புதிய விவசாயி பதிவு",
+                register_mobile: "கைபேசி எண் (உள்நுழைவுக்கு பயன்படுத்தப்படும்)",
+                register_pass: "கடவுச்சொல் (குறைந்தபட்சம் 6 எழுத்துக்கள்)",
+                register_pass_placeholder: "குறைந்தபட்சம் 6 எழுத்துக்கள்",
+                register_btn: "பதிவு செய்து உள்நுழைக",
+                register_success: "பதிவு வெற்றிகரம்! பலகத்திற்கு திருப்பி விடப்படுகிறது.",
+                register_error_exists: "இந்த கைபேசி எண்ணுடன் கணக்கு ஏற்கனவே உள்ளது. தயவுசெய்து உள்நுழைவு.",
+                register_error: "பதிவு தோல்வியடைந்தது. மீண்டும் முயற்சிக்கவும்.",
+                update_btn: "சுயவிவரத்தைப் புதுப்பிக்கவும்",
+
+                logout: "வெளியேறு", logout_success: "வெளியேற்றம் வெற்றி!",
+
+                // Rewards Content
+                rewards_h: "ஸ்மார்ட் விவசாயிகள் வெகுமதிகள் மற்றும் தினசரி செக்-இன்",
+                checkin_btn: "இப்போது செக்-இன் செய்யவும் (+50 நாணயங்கள்)",
+                checkin_done: "செக்-இன் முடிந்தது! நாளை வாருங்கள்.",
+                checkin_success: "தினசரி செக்-இன் வெற்றி! +50 நாணயங்கள் சேர்க்கப்பட்டன.",
+                checkin_error: "செக்-இன் தோல்வியடைந்தது. மீண்டும் முயற்சிக்கவும்.",
+                claim_btn: "₹100 வெகுமதியைப் பெறுங்கள் (1000 நாணயங்கள்)",
+                claim_success: "₹%s வெற்றிகரமாகப் பெறப்பட்டது! நாணயங்கள் கழிக்கப்பட்டன.",
+                claim_error_min: "போதுமான நாணயங்கள் இல்லை. பெற குறைந்தபட்சம் 1000 நாணயங்கள் தேவை.",
+
+                // Schemes Content
+                schemes_h: "விவசாயிகளுக்கான அரசு மானியங்கள்",
+                schemes_intro: "தமிழ்நாடு விவசாயத்திற்காக மத்திய மற்றும் மாநில அரசு திட்டங்களை அணுகவும்.",
+                scheme1_title: "துல்லியமான விவசாய மானியம் (மாநிலம்)",
+                scheme1_desc: "சொட்டுநீர் மற்றும் தெளிப்பான் அமைப்புகள் உட்பட நுண்ணீர் பாசன அமைப்புகளுக்கு 50% வரை மானியம் பெறுங்கள்.",
+                scheme2_title: "பயிர் காப்பீட்டுத் திட்டம் (மத்திய)",
+                scheme2_desc: "இயற்கை சீற்றங்களுக்கு எதிராக உங்கள் முக்கிய பயிர்களை காப்பீடு செய்து, நிதி ஸ்திரத்தன்மையை உறுதி செய்யுங்கள்.",
+                scheme3_title: "பண்ணை இயந்திரமயமாக்கல் உதவி (மாநிலம்)",
+                scheme3_desc: "டிராக்டர்கள், பவர் டில்லர்கள் மற்றும் பிற பண்ணை இயந்திரங்களை வாங்குவதற்கு நிதி உதவி.",
+                
+                // Dashboard 
+                current_price: "%s க்கான தற்போதைய சந்தை விலை விவரங்கள்", farmer_price: "விவசாயி விற்கும் விலை (ஒரு கிலோ)", best_region: "அருகிலுள்ள அதிக விலை உள்ள பகுதி", prediction_h: "விலை முன்னறிவிப்பு மற்றும் ஆலோசனை", price_history: "30-நாள் விலை வரலாறு", consultation: "1-க்கு-1 ஆலோசனைக்கு கோரிக்கை", loading: "நிகழ்நேர ML தரவை எடுக்கிறது...", harvest_date: "மதிப்பிடப்பட்ட அறுவடை தேதி:", market_trends: "சந்தை போக்குகள் (கடந்த 24 மணிநேரம்)", top_gainer: "அதிக லாபம் தரும் பயிர்", top_loser: "அதிக இழப்பைத் தரும் பயிர்", wait: "காத்திருங்கள்", sell: "இப்போது விற்கவும்", hold: "தக்கவைக்கவும்", wait_advice: "முன்னறிவிக்கப்பட்ட விலை உயரும் போக்கைக் காட்டுகிறது. அதிக லாபத்திற்கு மேலும் 2-3 நாட்கள் காத்திருக்கவும்.", sell_advice: "முன்னறிவிக்கப்பட்ட விலை இன்று உச்சத்தில் உள்ளது. போக்கு மாறுவதற்கு முன் இப்போதே விற்கவும்.", hold_advice: "சந்தை நிலையாக உள்ளது. நெருக்கமாக கண்காணிக்கவும் அல்லது சிறிய தொகுதிகளாக விற்கவும்.", reload_app: "பயன்பாட்டை மறுஏற்றம் செய்க", live_preview: "நேரடி சந்தை முன்னோட்டம் (ML அடிப்படையிலானது)", live_price: "தற்போதைய விலை வரம்பு (ஒரு கிலோ)", select_crop: "பயிரைத் தேர்ந்தெடுக்கவும்", select_region: "பகுதியைத் தேர்ந்தெடுக்கவும்",
+                chart_tooltip: "நாள் %d: ₹%s", live_commodity: "நேரடி பொருட்கள் விலைகள்", gauge_advice: "முன்னறிவிப்பு வலிமை",
+            }
+        };
+        let currentLang = 'en';
+
+        // --- Utility Functions (Simulated Data, Firebase, Toast) ---
+
+        const generatePriceRange = (crop) => { 
+             const base = CROP_BASES[crop].base;
+             const variance = base * 0.2; // 20% variance
+             const farmerMin = Math.floor((base - variance) + Math.random() * variance * 0.5);
+             const farmerMax = Math.floor((base + variance) + Math.random() * variance * 0.5);
+             return { farmerMin, farmerMax };
+        };
+        const simulateMarketTrends = () => { 
+             const trends = [];
+             for(let i=0; i<3; i++) {
+                 const crop = CROP_OPTIONS[Math.floor(Math.random() * CROP_OPTIONS.length)];
+                 trends.push({ crop, percentChange: (Math.random() * 5 + 1) * (i < 2 ? 1 : -1), currentPrice: CROP_BASES[crop].base + (Math.random() * 10) });
+             }
+             const topGainer = trends.reduce((max, trend) => trend.percentChange > max.percentChange ? trend : max, { percentChange: -Infinity });
+             const topLoser = trends.reduce((min, trend) => trend.percentChange < min.percentChange ? trend : min, { percentChange: Infinity });
+             
+             // Simulated Live Commodity Data
+             const liveCommodities = [
+                 { crop: 'Paddy (IR-20)', price: (2200 + Math.random() * 100).toFixed(0), unit: 'Quintal', change: Math.random() * 2 - 1 },
+                 { crop: 'Cotton (Bales)', price: (35000 + Math.random() * 2000).toFixed(0), unit: 'Bale', change: Math.random() * 2 - 1 },
+                 { crop: 'Turmeric (Kg)', price: (120 + Math.random() * 10).toFixed(2), unit: 'Kg', change: Math.random() * 2 - 1 },
+             ];
+             
+             return { topGainer, topLoser, liveCommodities };
+        };
+        const fetchMLData = async (cropType, region) => { 
+             return new Promise(resolve => {
+                 setTimeout(() => {
+                     const { farmerMin, farmerMax } = generatePriceRange(cropType);
+                     const farmerPrice = Math.floor(Math.random() * (farmerMax - farmerMin) + farmerMin);
+                     const tomorrowPrice = Math.floor(farmerPrice * (1 + (Math.random() * 0.1 - 0.03))); // +/- 3% to 7% change
+                     const bestRegion = TN_DISTRICTS[Math.floor(Math.random() * TN_DISTRICTS.length)];
+                     const bestRegionPrice = tomorrowPrice + Math.floor(Math.random() * 5 + 1);
+                     
+                     // New advice calculation: 
+                     // If TomorrowPrice is significantly lower than current farmerPrice, adviceValue is low (WAIT/RED).
+                     // If TomorrowPrice is significantly higher than current farmerPrice, adviceValue is high (SELL/GREEN).
+                     const priceDifference = tomorrowPrice - farmerPrice;
+                     // Map a difference range (e.g., -5 to +10) to 0-100.
+                     const minDiff = -5;
+                     const maxDiff = 10;
+                     let adviceValue = (priceDifference - minDiff) / (maxDiff - minDiff) * 100;
+                     adviceValue = Math.min(100, Math.max(0, Math.round(adviceValue)));
+                     
+                     const history = Array(30).fill(0).map((_, i) => ({
+                         day: 30 - i,
+                         price: Math.floor(farmerPrice * (1 + (Math.random() * 0.2 - 0.1)) + 5 * Math.sin(i / 5)) 
+                     })).reverse();
+                     
+                     resolve({
+                         cropType, region,
+                         farmerPrice: farmerPrice.toFixed(2),
+                         tomorrowPrice: tomorrowPrice.toFixed(2),
+                         bestRegion,
+                         bestRegionPrice: bestRegionPrice.toFixed(2),
+                         adviceValue: adviceValue, // 0-100 value for gauge
+                         priceHistory: history,
+                         marketTrends: simulateMarketTrends()
+                     });
+                 }, 1500); // Simulate API call delay
+             });
+        };
+
+        const showToast = (message, type = 'success') => {
+            const toastContainer = document.getElementById('toastContainer');
+            if (!toastContainer) return;
+
+            const baseClass = 'fixed top-4 left-1/2 transform -translate-x-1/2 px-6 py-3 rounded-xl shadow-2xl transition-all duration-300 z-50 flex items-center';
+            let colorClass = type === 'success' ? 'bg-green-600 text-white' : 'bg-red-600 text-white'; 
+            let iconSvg = type === 'success' ? `<svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>` : `<svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>`;
+
+            const toast = document.createElement('div');
+            toast.className = `${baseClass} ${colorClass} toast-enter`;
+            toast.innerHTML = `${iconSvg}<span class="font-semibold text-sm">${message}</span>`;
+            
+            toastContainer.appendChild(toast);
+
+            setTimeout(() => {
+                toast.classList.remove('toast-enter');
+                toast.classList.add('toast-exit');
+                toast.addEventListener('transitionend', () => toast.remove());
+            }, 3000);
+        };
+
+        // --- NEW Login Functions (Mobile/Password Based) ---
+        const handleLogin = async (e) => {
+            e.preventDefault();
+            if (!authReady) return;
+            const content = I18N[currentLang];
+            const mobile = document.getElementById('mobile').value;
+            const password = document.getElementById('password').value;
+
+            if (!mobile || !password) {
+                showToast(content.login_required_fields, 'error');
+                return;
+            }
+            
+            try {
+                // 1. Query the public farmer profiles collection using the mobile number as the document ID
+                const docRef = doc(db, FARMER_COLLECTION_PATH(mobile));
+                const docSnap = await getDoc(docRef);
+
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    
+                    // 2. Simple password verification (In a real app, this would be a hash comparison)
+                    if (data.password === password) { 
+                        
+                        showToast(content.login_success, 'success');
+                        
+                        // 3. Set current mobile/identity and subscribe to profile changes
+                        currentMobile = mobile;
+                        localStorage.setItem('agri_mobile', mobile); // Persist identity
+                        
+                        // Set up the real-time listener for the new logged-in user's profile
+                        onSnapshot(docRef, (snap) => {
+                            if (snap.exists()) {
+                                farmerData = { 
+                                    coins: 0, 
+                                    lastCheckInTimestamp: new Date(0).toISOString(), 
+                                    ...snap.data() 
+                                };
+                                renderMainApp();
+                            }
+                        }, (error) => { console.error("Error listening to profile:", error); showToast("Failed to load profile.", 'error'); });
+
+                    } else {
+                        showToast(content.login_invalid_credentials, 'error');
+                    }
+                } else {
+                    showToast(content.login_invalid_credentials, 'error');
+                }
+
+            } catch (e) {
+                console.error("Login failed: ", e);
+                showToast(content.login_failed, 'error');
+            }
+        };
+
+        const showLogin = () => {
+            const container = document.getElementById('app-container');
+            const content = I18N[currentLang];
+            
+            container.innerHTML = `
+                <!-- Full-screen Login/Password Screen -->
+                <div class="flex items-center justify-center min-h-screen bg-gray-50 p-4">
+                    <div class="w-full max-w-sm bg-white p-8 rounded-2xl shadow-2xl border-t-4 border-lime-600 animate-fadeIn">
+                        <h1 class="text-3xl font-extrabold text-lime-700 mb-2 text-center">${content.title}</h1>
+                        <p class="text-gray-500 mb-6 text-center text-sm italic">${content.moto}</p>
+                        <form id="loginForm">
+                            <div class="mb-4">
+                                <label for="mobile" class="block text-sm font-medium text-gray-600 mb-1">${content.login_mobile}</label>
+                                <input type="tel" id="mobile" required class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-lime-500 focus:border-lime-500 transition duration-300 shadow-sm" placeholder="9999988888">
+                            </div>
+                            
+                            <div class="mb-6">
+                                <label for="password" class="block text-sm font-medium text-gray-600 mb-1">${content.login_pass}</label>
+                                <input type="password" id="password" required class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-lime-500 focus:border-lime-500 transition duration-300 shadow-sm" placeholder="******">
+                                <p class="text-xs text-gray-500 mt-1 italic">${content.login_note}</p>
+                            </div>
+
+                            <button type="submit" class="w-full bg-lime-600 hover:bg-lime-700 text-white font-bold py-3 rounded-xl transition duration-300 ease-in-out transform hover:scale-[1.01] shadow-md shadow-lime-300">
+                                ${content.login_btn}
+                            </button>
+                        </form>
+                        
+                        <button onclick="showRegistration()" class="mt-4 w-full text-center text-sm text-lime-600 hover:text-lime-700 font-semibold transition duration-300">
+                             ${content.login_register_link}
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('loginForm').addEventListener('submit', handleLogin);
+            applyLanguageSwitchListeners();
+        };
+
+        // --- Firebase Initialization and Auth ---
+
+        const attemptAutoLogin = async (mobile) => {
+            if (!mobile || !authReady) return showLogin();
+            
+            try {
+                const docRef = doc(db, FARMER_COLLECTION_PATH(mobile));
+                const docSnap = await getDoc(docRef);
+
+                if (docSnap.exists()) {
+                    currentMobile = mobile;
+                    // Set up the real-time listener for the user's profile
+                    onSnapshot(docRef, (snap) => {
+                        if (snap.exists()) {
+                            farmerData = { 
+                                coins: 0, 
+                                lastCheckInTimestamp: new Date(0).toISOString(), 
+                                ...snap.data() 
+                            };
+                            renderMainApp();
+                        } else {
+                            // Document was deleted remotely
+                            handleLogout();
+                        }
+                    }, (error) => { console.error("Error listening to profile:", error); showLogin(); });
+                } else {
+                    localStorage.removeItem('agri_mobile');
+                    showLogin();
+                }
+            } catch (e) {
+                console.error("Auto login failed:", e);
+                showLogin();
+            }
+        }
+
+        const initFirebase = async () => { 
+            if (!firebaseConfig) { console.error("Firebase Config is not defined."); return; }
+            try {
+                setLogLevel('Debug');
+                const config = typeof firebaseConfig === 'string' ? JSON.parse(firebaseConfig) : firebaseConfig;
+                app = initializeApp(config);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                // Sign in anonymously first, as required by security rules
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) { 
+                        userId = user.uid; 
+                        authReady = true;
+
+                        // Try to load user data from persistent storage (Mobile Number)
+                        const storedMobile = localStorage.getItem('agri_mobile');
+                        if (storedMobile) {
+                            await attemptAutoLogin(storedMobile);
+                        } else {
+                            // User is authenticated anonymously but no profile is loaded -> show login
+                            showLogin(); 
+                        }
+
+                    } else {
+                        // User logged out or initial state, show login
+                        authReady = false;
+                        userId = null;
+                        farmerData = null;
+                        currentMobile = null;
+                        localStorage.removeItem('agri_mobile');
+                        showLogin(); 
+                    }
+                });
+            } catch (e) { console.error("Error initializing Firebase:", e); }
+        };
+
+        // --- Data Storage and Registration ---
+
+        const handleRegistration = async (e) => { 
+            e.preventDefault();
+            if (!authReady) return; 
+            const content = I18N[currentLang];
+            
+            // Scroll to top to ensure toast messages are seen
+            window.scrollTo(0, 0);
+
+            const name = document.getElementById('name').value;
+            const mobile = document.getElementById('mobile').value;
+            const password = document.getElementById('password').value;
+            const cropType = document.getElementById('cropType').value;
+            const region = document.getElementById('region').value;
+            const isEditing = !!farmerData;
+
+            if (!name || !mobile || !password || !cropType || !region) { 
+                console.error("Registration failed: Missing required fields.", { name: !!name, mobile: !!mobile, password: !!password, cropType: !!cropType, region: !!region });
+                showToast(content.required_field, 'error'); 
+                return; 
+            }
+            if (password.length < 6) { showToast("Password must be at least 6 characters.", 'error'); return; }
+            
+            const harvestDate = CROP_BASES[cropType]?.harvest || '2025-11-01';
+
+            try {
+                const farmerDocRef = doc(db, FARMER_COLLECTION_PATH(mobile));
+                const docSnap = await getDoc(farmerDocRef);
+
+                if (!isEditing && docSnap.exists()) {
+                     console.warn(`Registration attempt for existing mobile: ${mobile}`);
+                     showToast(content.register_error_exists, 'error');
+                     return;
+                }
+
+                const newFarmerData = {
+                    name, contact: mobile, mobile, password, // Store mobile and password (simplified)
+                    cropType, region, harvestDate, 
+                    // Preserve existing data if updating
+                    registeredAt: farmerData?.registeredAt || new Date().toISOString(), 
+                    updatedAt: new Date().toISOString(),
+                    coins: farmerData?.coins || 0, 
+                    lastCheckInTimestamp: farmerData?.lastCheckInTimestamp || new Date(0).toISOString()
+                };
+
+                await setDoc(farmerDocRef, newFarmerData);
+                
+                // If successful registration/update, log the user in immediately
+                currentMobile = mobile;
+                localStorage.setItem('agri_mobile', mobile);
+                farmerData = newFarmerData; // Optimistically set data
+                
+                showToast(isEditing ? content.update_btn : content.register_success, 'success');
+                currentView = 'dashboard';
+                renderMainApp();
+                
+            } catch (e) {
+                console.error("Error registering/updating farmer: ", e);
+                showToast(content.register_error, 'error');
+            }
+        };
+
+        // --- Coin System Logic (UPDATED to use currentMobile) ---
+
+        const handleDailyCheckIn = async () => {
+             if (!currentMobile) return;
+             const content = I18N[currentLang];
+             const now = new Date();
+             const lastCheckIn = new Date(farmerData.lastCheckInTimestamp);
+             
+             // Check if 24 hours have passed
+             if (now.getTime() - lastCheckIn.getTime() < (24 * 60 * 60 * 1000)) {
+                 showToast(content.checkin_done, 'error');
+                 return;
+             }
+             
+             try {
+                 const newCoins = farmerData.coins + 50;
+                 const checkInTime = now.toISOString();
+                 
+                 const docRef = doc(db, FARMER_COLLECTION_PATH(currentMobile));
+                 await updateDoc(docRef, {
+                     coins: newCoins,
+                     lastCheckInTimestamp: checkInTime
+                 });
+                 
+                 showToast(content.checkin_success, 'success');
+             } catch (e) {
+                 console.error("Check-in failed:", e);
+                 showToast("Check-in failed.", 'error');
+             }
+        };
+
+        const handleClaimCoins = async () => {
+             if (!currentMobile) return;
+             const content = I18N[currentLang];
+             const coinsToClaim = 1000;
+             
+             if (farmerData.coins < coinsToClaim) {
+                 showToast(content.claim_error_min, 'error');
+                 return;
+             }
+
+             try {
+                 const amount = (coinsToClaim / 1000) * 100; // 1000 coins = 100 INR
+                 const newCoins = farmerData.coins - coinsToClaim;
+                 
+                 const docRef = doc(db, FARMER_COLLECTION_PATH(currentMobile));
+                 await updateDoc(docRef, {
+                     coins: newCoins
+                 });
+                 
+                 showToast(content.claim_success.replace('%s', amount.toFixed(2)), 'success');
+             } catch (e) {
+                 console.error("Claim failed:", e);
+                 showToast("Claim failed.", 'error');
+             }
+        };
+
+
+        // --- UI Rendering and Switching (Refactored for Left Sidebar) ---
+
+        const switchLanguage = (lang) => { 
+             currentLang = lang;
+            // The language must be applied to the current view
+            if (currentMobile) {
+                // Re-render the main app wrapper (which includes the sidebar)
+                renderMainApp(false); 
+                // Re-render the specific content view with the new language and force ML data re-fetch if on dashboard
+                showView(currentView, currentView === 'dashboard');
+            } else if (authReady) {
+                showLogin(); 
+            }
+        };
+
+        const showView = (viewName, shouldFetchML = false) => {
+            currentView = viewName;
+            const contentArea = document.getElementById('content-area');
+            if (!contentArea) return;
+            
+            // Highlight active menu item
+            document.querySelectorAll('.menu-item').forEach(el => {
+                const isActive = el.dataset.view === viewName;
+                el.classList.toggle('bg-amber-600', isActive);
+                el.classList.toggle('bg-opacity-20', isActive);
+                el.classList.toggle('text-white', isActive);
+                el.classList.toggle('text-gray-300', !isActive);
+            });
+
+            if (viewName === 'profile') {
+                 showRegistration(true);
+                 return;
+            }
+            
+            contentArea.innerHTML = '';
+            
+            if (viewName === 'dashboard') {
+                renderDashboardContent(shouldFetchML);
+            } else if (viewName === 'schemes') {
+                renderSchemesContent();
+            } else if (viewName === 'rewards') {
+                renderRewardsContent();
+            }
+            window.scrollTo(0, 0); // Scroll to top on view change
+        };
+
+        const renderMainApp = async (startView = true) => { 
+             if (!farmerData) return;
+            const content = I18N[currentLang];
+            const container = document.getElementById('app-container');
+            
+            container.innerHTML = `
+                <div class="min-h-screen bg-gray-50 flex">
+                    <!-- Left Sidebar (Fixed, Vertical - Narrow on mobile, Wide on desktop) -->
+                    <div id="sidebar" class="fixed top-0 left-0 w-16 lg:w-64 h-screen bg-gray-800 shadow-2xl z-40 flex flex-col transition-all duration-300">
+                        
+                        <!-- Logo/Header -->
+                        <div class="flex items-center justify-center lg:justify-start h-16 border-b border-gray-700 p-3 lg:p-4 mb-4">
+                            <svg class="w-8 h-8 text-lime-500 mr-0 lg:mr-3 transform transition-transform duration-300 hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 8v8m-4-8v8m-4-8v8M6 4h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2z"></path></svg>
+                            <h2 class="hidden lg:block text-2xl font-extrabold text-lime-500">${content.title}</h2>
+                        </div>
+
+                        <!-- Menu Buttons (Vertical on all screens) -->
+                        <div class="flex flex-col space-y-2 px-2 lg:px-4 flex-grow">
+                            ${getMenuItem('dashboard', content.menu_dashboard, 'M3 12l2-2m0 0l7-7 4 4M5 12h2.5M19 12h2.5M10 16h4M12 21v-5', 'house')}
+                            ${getMenuItem('schemes', content.menu_schemes, 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h.01M15 7H9', 'folder')}
+                            ${getMenuItem('rewards', content.menu_rewards, 'M12 8c-1.657 0-3 1.343-3 3s1.343 3 3 3 3-1.343 3-3V5m-3 3v8', 'coin')}
+                            ${getMenuItem('profile', content.menu_profile, 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z', 'pencil')}
+                        </div>
+
+                        <!-- Footer Actions (Visible on all screens, but text hidden on mobile) -->
+                        <div class="mt-auto p-2 lg:p-4 border-t border-gray-700">
+                             <p class="hidden lg:block text-xs text-gray-500 mb-2">${content.user_id}: <span class="font-mono text-gray-400 break-all">${currentMobile}</span></p>
+                            <button onclick="handleLogout()" class="w-full text-sm font-semibold p-2 lg:p-3 bg-red-600 text-white hover:bg-red-700 rounded-xl transition duration-300 transform hover:scale-[1.02]">
+                                <span class="hidden lg:inline">${content.logout}</span>
+                                <span class="lg:hidden flex justify-center"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg></span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Right Content Area (Margin-left pushes content past the sidebar) -->
+                    <div id="content-area" class="flex-grow p-4 sm:p-8 ml-16 lg:ml-64 transition-all duration-300">
+                        <!-- Content will be injected here -->
+                    </div>
+                </div>
+            `;
+
+            document.querySelectorAll('.menu-item').forEach(item => {
+                item.addEventListener('click', () => showView(item.dataset.view));
+            });
+
+            if(startView) showView(currentView, true);
+        };
+
+        const getMenuItem = (viewName, label, iconPath, iconType) => {
+            const isActive = currentView === viewName;
+            const activeClass = isActive ? 'bg-amber-600 bg-opacity-20 text-white' : 'text-gray-300 hover:bg-gray-700';
+            
+            const baseClass = 'flex items-center justify-center lg:justify-start w-full p-3 rounded-xl transition duration-300 ease-in-out menu-item';
+
+            return `
+                <button data-view="${viewName}" class="${baseClass} ${activeClass} group">
+                    <svg class="w-6 h-6 mr-0 lg:mr-3 transition duration-300 transform group-hover:scale-105" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${iconPath}"></path></svg>
+                    <span class="hidden lg:block font-semibold text-sm">${label}</span>
+                </button>
+            `;
+        };
+        
+        // --- NEW GAUGE CHART FUNCTION ---
+        const drawGaugeChart = (canvasId, value, needleColor) => {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return;
+
+            const ctx = canvas.getContext('2d');
+            const size = canvas.width; 
+            const center = size / 2;
+            const radius = size * 0.35;
+            const arcWidth = size * 0.08;
+
+            ctx.clearRect(0, 0, size, size);
+
+            // Draw Gauge Background Segments (0-40 Wait, 40-60 Hold, 60-100 Sell)
+            const startAngle = Math.PI; // 180 degrees
+            const endAngle = 2 * Math.PI; // 360 degrees
+
+            // Helper to draw an arc segment
+            const drawSegment = (color, start, end) => {
+                ctx.beginPath();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = arcWidth;
+                ctx.arc(center, center, radius, start, end);
+                ctx.stroke();
+            };
+
+            // 1. Wait Zone (Red: 0% to 40%) - Expect price rise, so WAIT
+            drawSegment('#EF4444', startAngle, startAngle + 0.4 * Math.PI); 
+            // 2. Hold Zone (Amber: 40% to 60%) - Stable/Monitor
+            drawSegment('#F59E0B', startAngle + 0.4 * Math.PI, startAngle + 0.6 * Math.PI); 
+            // 3. Sell Zone (Green: 60% to 100%) - Price peaking, so SELL
+            drawSegment('#10B981', startAngle + 0.6 * Math.PI, endAngle); 
+
+            // --- Draw Needle ---
+            ctx.save();
+            
+            // Normalize value (0-100) to an angle from PI (0%) to 2*PI (100%)
+            const normalizedAngle = Math.PI + (value / 100) * Math.PI; 
+            
+            ctx.translate(center, center);
+            ctx.rotate(normalizedAngle);
+
+            // Needle style
+            ctx.beginPath();
+            ctx.moveTo(0, 5); 
+            ctx.lineTo(0, -5); 
+            ctx.lineTo(radius * 0.9, 0); // Tip
+            ctx.closePath();
+            
+            ctx.fillStyle = needleColor;
+            ctx.fill();
+
+            // Needle pivot (center dot)
+            ctx.beginPath();
+            ctx.arc(0, 0, arcWidth / 3, 0, 2 * Math.PI);
+            ctx.fillStyle = '#374151'; 
+            ctx.fill();
+
+            // Draw labels
+            ctx.rotate(-normalizedAngle); // Rotate back for text
+            ctx.fillStyle = '#111827';
+            ctx.font = '14px Inter';
+            ctx.textAlign = 'center';
+            ctx.fillText(value + '%', 0, -(radius * 0.5)); // Display percentage above pivot
+
+            ctx.restore();
+        };
+
+        const renderDashboardContent = async (shouldFetchML) => { 
+             const contentArea = document.getElementById('content-area');
+            const content = I18N[currentLang];
+            const { cropType, region, name } = farmerData;
+
+            if (shouldFetchML && (!currentMarketData || currentMarketData.cropType !== cropType || currentMarketData.region !== region)) {
+                 contentArea.innerHTML = `
+                    <div class="animate-slideIn text-center p-10 bg-white rounded-xl shadow-xl mt-8">
+                         <div class="w-10 h-10 border-4 border-t-4 border-lime-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                         <p class="text-xl font-semibold text-gray-700">${content.loading}</p>
+                         <p class="text-sm text-gray-500 mt-2">Connecting to ML prediction service for ${cropType} in ${region}...</p>
+                    </div>
+                `;
+            }
+
+            try {
+                if (shouldFetchML || !currentMarketData || currentMarketData.cropType !== cropType || currentMarketData.region !== region) {
+                    currentMarketData = await fetchMLData(cropType, region);
+                }
+            } catch (error) {
+                console.error("Critical Error: Failed to load dashboard data.", error);
+                contentArea.innerHTML = `
+                    <div class="p-8 text-center bg-red-100 text-red-700 rounded-xl shadow-xl mt-8">
+                        <h2 class="text-2xl font-bold mb-4">ML Data Fetch Error</h2>
+                        <p>${error.message}</p>
+                        <p class="text-sm mt-2">Please check your network and try reloading.</p>
+                        <button onclick="window.location.reload()" class="mt-4 px-4 py-2 bg-red-500 text-white rounded-lg transition duration-300 hover:bg-red-600">${content.reload_app}</button>
+                    </div>
+                `;
+                return;
+            }
+            
+            const marketData = currentMarketData;
+            const { farmerPrice, tomorrowPrice, bestRegion, bestRegionPrice, adviceValue, marketTrends } = marketData;
+            
+            // --- Determine Advice Based on Gauge Zones (0-100) ---
+            let adviceText, adviceAction, adviceColor, needleColor;
+            if (adviceValue >= 60) {
+                adviceAction = content.sell;
+                adviceText = content.sell_advice;
+                adviceColor = 'bg-green-600';
+                needleColor = '#10B981'; // Tailwind Green-500
+            } else if (adviceValue >= 40) {
+                adviceAction = content.hold;
+                adviceText = content.hold_advice;
+                adviceColor = 'bg-amber-500';
+                needleColor = '#F59E0B'; // Tailwind Amber-500
+            } else {
+                adviceAction = content.wait;
+                adviceText = content.wait_advice;
+                adviceColor = 'bg-red-600';
+                needleColor = '#EF4444'; // Tailwind Red-500
+            }
+
+            const currentPriceTitle = content.current_price.replace('%s', cropType); 
+            const gainer = marketTrends.topGainer;
+            const loser = marketTrends.topLoser;
+            const liveCommodities = marketTrends.liveCommodities;
+
+            contentArea.innerHTML = `
+                <div class="animate-slideIn">
+                    <!-- Header with Welcome and Language Switch -->
+                    <header class="mb-8 p-4 bg-white rounded-xl shadow-lg flex justify-between items-center transition duration-300">
+                        <div>
+                            <h1 class="text-3xl sm:text-4xl font-extrabold text-gray-800">${content.dashboard_h}</h1>
+                            <p class="text-lg text-gray-600 mt-1">${content.welcome}, <span class="font-bold text-lime-700">${name}</span>! </p>
+                            <p class="text-sm text-gray-500 mt-1 font-semibold">Your Crop: <span class="text-amber-600">${cropType}</span> in <span class="text-amber-600">${region}</span></p>
+                            <p class="text-xs text-gray-400 mt-1">${content.harvest_date} ${farmerData.harvestDate}</p>
+                        </div>
+                        <!-- Translator Button -->
+                        <button onclick="switchLanguage(currentLang === 'en' ? 'ta' : 'en')" 
+                                class="flex items-center text-sm font-bold p-2 px-3 rounded-full bg-amber-500 text-white hover:bg-amber-600 transition duration-300 shadow-lg transform hover:scale-105">
+                            ${currentLang === 'en' ? 'தமிழ் (TA)' : 'English (EN)'}
+                            <svg class="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 0115 16.5m-8.5.5a18.022 18.022 0 016.5 0M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z"></path></svg>
+                        </button>
+                    </header>
+                    
+                    <!-- TOP SECTION: Prediction GAUGE & Current Price Overview -->
+                    <div class="grid grid-cols-1 lg:grid-cols-5 gap-6 mb-8">
+                        
+                        <!-- 1. Prediction Gauge Card (Focus Area) -->
+                        <div class="lg:col-span-2 p-6 rounded-xl shadow-2xl flex flex-col justify-between transition duration-300 transform hover:scale-[1.01] bg-white border-t-4 ${adviceColor}">
+                            <h2 class="text-xl sm:text-2xl font-bold text-gray-800 mb-4 border-b pb-2">
+                                ${content.prediction_h}
+                            </h2>
+
+                            <!-- GAUGE CHART AREA -->
+                            <div class="flex flex-col items-center justify-center relative my-4">
+                                <!-- Canvas for the Gauge -->
+                                <canvas id="predictionGauge" width="250" height="150" class="w-full max-w-xs"></canvas>
+                                <!-- Advice Action Label -->
+                                <div class="absolute bottom-2 left-1/2 transform -translate-x-1/2">
+                                     <p class="text-lg font-bold text-gray-700">${content.gauge_advice}: <span class="text-2xl font-extrabold" style="color:${needleColor};">${adviceValue}%</span></p>
+                                </div>
+                            </div>
+                            
+                            <!-- Advice Action Button -->
+                            <div class="mt-4 text-center">
+                                <p class="text-2xl font-extrabold ${adviceColor} bg-opacity-90 text-white py-2 rounded-xl mb-3">
+                                    ${adviceAction}
+                                </p>
+                                <p class="text-base text-gray-700 font-medium">${adviceText}</p>
+                            </div>
+                        </div>
+
+                        <!-- 2. Current Price and Best Region (Detailed Info) -->
+                        <div class="lg:col-span-3 bg-white p-6 rounded-xl shadow-2xl flex flex-col justify-between transition duration-300 hover:shadow-xl">
+                            <h2 class="text-xl font-bold text-gray-700 mb-4 border-b pb-2">${currentPriceTitle}</h2>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 h-full">
+                                <!-- Farmer Selling Price -->
+                                <div class="p-4 bg-lime-50 rounded-lg border-l-4 border-lime-500 flex flex-col justify-center">
+                                    <p class="text-sm text-gray-500">${content.farmer_price}</p>
+                                    <p class="text-3xl font-extrabold text-lime-700 mt-1">₹${farmerPrice}</p>
+                                </div>
+                                <!-- Best Region Price -->
+                                <div class="p-4 bg-amber-50 rounded-lg border-l-4 border-amber-500 flex flex-col justify-center">
+                                    <p class="text-sm text-gray-500">${content.best_region}</p>
+                                    <p class="text-xl font-bold text-amber-700 mt-1">${bestRegion}</p>
+                                    <p class="text-sm text-gray-500">@ ₹${bestRegionPrice}</p>
+                                </div>
+                                <!-- Consultation Button -->
+                                <button id="consultationBtn" class="bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 px-4 rounded-xl transition duration-300 ease-in-out transform hover:scale-[1.01] shadow-lg self-center">
+                                    <svg class="inline w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V8a2 2 0 002-2h-2m-4-2H7a2 2 0 00-2 2v6a2 2 0 002 2h2"></path></svg>
+                                    ${content.consultation}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- MID SECTION: Market Trends and Live Commodities -->
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                        <!-- 3. Market Trends (Gainer/Loser) -->
+                        <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-2xl transition duration-300 hover:shadow-xl">
+                            <h2 class="text-xl font-bold text-gray-700 mb-4 border-b pb-2">${content.market_trends}</h2>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <!-- Top Gainer Card -->
+                                <div class="p-4 bg-green-50 rounded-xl border-l-4 border-green-500 shadow-md transition duration-300 hover:shadow-lg flex items-center justify-between">
+                                    <div>
+                                        <p class="text-sm font-semibold text-green-800">${content.top_gainer} 🌱</p>
+                                        <p class="text-2xl font-extrabold text-green-600 mt-1">${gainer.crop}</p>
+                                    </div>
+                                    <div class="text-right">
+                                        <p class="text-xl font-bold text-green-600">+${gainer.percentChange.toFixed(2)}%</p>
+                                        <p class="text-xs text-gray-500">₹${gainer.currentPrice.toFixed(2)}/Kg</p>
+                                    </div>
+                                </div>
+                                <!-- Top Loser Card -->
+                                <div class="p-4 bg-red-50 rounded-xl border-l-4 border-red-500 shadow-md transition duration-300 hover:shadow-lg flex items-center justify-between">
+                                    <div>
+                                        <p class="text-sm font-semibold text-red-800">${content.top_loser} 📉</p>
+                                        <p class="text-2xl font-extrabold text-red-600 mt-1">${loser.crop}</p>
+                                    </div>
+                                    <div class="text-right">
+                                        <p class="text-xl font-bold text-red-600">${loser.percentChange.toFixed(2)}%</p>
+                                        <p class="text-xs text-gray-500">₹${loser.currentPrice.toFixed(2)}/Kg</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 4. Live Commodity Prices Card -->
+                        <div class="lg:col-span-1 bg-white p-6 rounded-xl shadow-2xl transition duration-300 hover:shadow-xl">
+                            <h2 class="text-xl font-bold text-gray-700 mb-4 border-b pb-2">${content.live_commodity}</h2>
+                            <ul class="space-y-3">
+                                ${liveCommodities.map(item => `
+                                    <li class="flex justify-between items-center py-2 border-b border-gray-100 last:border-b-0">
+                                        <span class="font-medium text-gray-800">${item.crop}</span>
+                                        <div class="text-right">
+                                            <span class="font-bold text-lg text-blue-700">₹${item.price}</span>
+                                            <span class="text-xs text-gray-500 ml-1">${item.unit}</span>
+                                            <span class="text-sm font-semibold ${item.change >= 0 ? 'text-green-500' : 'text-red-500'} ml-2">
+                                                ${item.change >= 0 ? '▲' : '▼'} ${Math.abs(item.change).toFixed(2)}%
+                                            </span>
+                                        </div>
+                                    </li>
+                                `).join('')}
+                            </ul>
+                        </div>
+                    </div>
+
+                    <!-- BOTTOM SECTION: Price History Chart -->
+                    <div class="bg-white p-6 rounded-xl shadow-2xl relative transition duration-300 hover:shadow-xl">
+                        <h2 class="text-xl sm:text-2xl font-bold text-gray-700 mb-4 border-b pb-2">${content.price_history}</h2>
+                        <div class="relative h-80">
+                            <canvas id="priceChart" class="w-full h-full"></canvas>
+                            <div id="chartTooltip" class="absolute hidden bg-gray-800 text-white text-xs p-2 rounded-lg shadow-lg pointer-events-none whitespace-nowrap"></div>
+                        </div>
+                    </div>
+
+                </div>
+            `;
+            document.getElementById('consultationBtn').addEventListener('click', handleConsultationRequest);
+            drawChart(marketData.priceHistory);
+            drawGaugeChart('predictionGauge', adviceValue, needleColor); // Draw the gauge
+        };
+
+        const renderSchemesContent = () => { 
+             const contentArea = document.getElementById('content-area');
+            const content = I18N[currentLang];
+            contentArea.innerHTML = `
+                <div class="animate-slideIn max-w-4xl mx-auto">
+                    <h1 class="text-3xl sm:text-4xl font-extrabold text-lime-700 mb-6">${content.schemes_h}</h1>
+                    <p class="text-lg text-gray-600 mb-10">${content.schemes_intro}</p>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        ${getSchemeCard(content.scheme1_title, content.scheme1_desc, 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h.01M15 7H9', 'text-blue-600', 'bg-blue-100')}
+                        ${getSchemeCard(content.scheme2_title, content.scheme2_desc, 'M3 12l2-2m0 0l7-7 4 4M5 12h2.5M19 12h2.5M10 16h4M12 21v-5', 'text-green-600', 'bg-green-100')}
+                        ${getSchemeCard(content.scheme3_title, content.scheme3_desc, 'M12 8c-1.657 0-3 1.343-3 3s1.343 3 3 3 3-1.343 3-3V5m-3 3v8', 'text-amber-600', 'bg-amber-100')}
+                    </div>
+                </div>
+            `;
+        };
+
+        const getSchemeCard = (title, description, iconPath, iconColor, bgColor) => `
+            <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-100 transition duration-300 hover:shadow-2xl hover:border-lime-400">
+                <div class="flex items-center mb-4">
+                    <div class="p-3 ${bgColor} rounded-full mr-4 shadow-md">
+                        <svg class="w-6 h-6 ${iconColor}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${iconPath}"></path></svg>
+                    </div>
+                    <h3 class="text-xl font-bold text-gray-800">${title}</h3>
+                </div>
+                <p class="text-gray-600 text-base leading-relaxed">${description}</p>
+                <button class="mt-4 text-sm font-semibold text-lime-600 hover:text-lime-700 transition duration-300">View Details →</button>
+            </div>
+        `;
+
+        const renderRewardsContent = () => { 
+             const contentArea = document.getElementById('content-area');
+            const content = I18N[currentLang];
+            // Uses farmerData, which is loaded via the mobile number identity
+            const coins = farmerData?.coins || 0; 
+            const canCheckIn = (Date.now() - new Date(farmerData.lastCheckInTimestamp).getTime() >= (24 * 60 * 60 * 1000));
+            
+            contentArea.innerHTML = `
+                <div class="animate-slideIn max-w-4xl mx-auto">
+                    <h1 class="text-3xl sm:text-4xl font-extrabold text-lime-700 mb-8">${content.rewards_h}</h1>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                        <!-- Total Coins Card -->
+                        <div class="p-6 bg-amber-500 rounded-xl shadow-2xl lg:col-span-2 flex items-center justify-between transition duration-300 hover:shadow-3xl transform hover:scale-[1.01]">
+                            <div>
+                                <p class="text-xl text-white font-semibold">Your Total Coins:</p>
+                                <p class="text-7xl font-extrabold text-white mt-1">${coins}</p>
+                            </div>
+                            <svg class="w-20 h-20 text-white text-opacity-70" fill="currentColor" viewBox="0 0 24 24"><path d="M12 8c-1.657 0-3 1.343-3 3s1.343 3 3 3 3-1.343 3-3V5m-3 3v8"/></svg>
+                        </div>
+                        
+                        <!-- Daily Check-in Card -->
+                        <div class="p-6 bg-white rounded-xl shadow-xl flex flex-col justify-between border-t-4 border-green-500 transition duration-300 hover:shadow-2xl">
+                            <p class="text-lg font-semibold text-gray-800 mb-3">Daily Check-in Reward:</p>
+                            <p class="text-4xl font-bold text-green-600 mb-4">+50 Coins</p>
+                            <button onclick="handleDailyCheckIn()" ${!canCheckIn ? 'disabled' : ''} class="w-full py-3 rounded-xl font-bold transition duration-300 ${canCheckIn ? 'bg-green-600 hover:bg-green-700 text-white shadow-lg' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}">
+                                ${canCheckIn ? content.checkin_btn : content.checkin_done}
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Claim Section -->
+                    <div class="p-8 bg-white rounded-xl shadow-2xl border-l-4 border-blue-500 transition duration-300 hover:shadow-xl">
+                        <h2 class="text-2xl font-bold text-gray-700 mb-4 border-b pb-2">Claim Your Rewards</h2>
+                        <div class="flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
+                            <div>
+                                <p class="text-lg font-medium text-gray-600">Claim ₹100 for every 1000 Coins</p>
+                                <p class="text-sm text-gray-500">You currently have ${coins} coins.</p>
+                            </div>
+                            <button onclick="handleClaimCoins()" class="w-full md:w-auto py-3 px-8 rounded-xl font-bold transition duration-300 ${coins >= 1000 ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-md' : 'bg-gray-200 text-gray-500 cursor-not-allowed'}" ${coins < 1000 ? 'disabled' : ''}>
+                                ${content.claim_btn}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+        
+        const showRegistration = (isEditing = false) => {
+            const container = document.getElementById('app-container');
+            const content = I18N[currentLang];
+            
+            const buttonText = isEditing ? content.update_btn : content.register_btn;
+            const mobileValue = isEditing ? farmerData.mobile : '';
+            const passwordValue = isEditing ? farmerData.password : ''; 
+            const headerText = isEditing ? content.menu_profile : content.register_h;
+
+            container.innerHTML = `
+                <!-- Registration screen is full-page or content area if editing -->
+                <div class="min-h-screen bg-gray-50 flex flex-col ${isEditing ? 'lg:pl-64' : ''} ml-16 lg:ml-0"> 
+                    <div class="flex items-center justify-center p-4 py-8 w-full">
+                        <div class="w-full max-w-lg bg-white p-8 rounded-2xl shadow-2xl border-t-4 border-lime-600 animate-fadeIn">
+                            <h1 class="text-3xl font-extrabold text-lime-700 mb-6 text-center">${headerText}</h1>
+                            <form id="registrationForm">
+                                <!-- Farmer Name -->
+                                <div class="mb-4"><label for="name" class="block text-sm font-medium text-gray-600 mb-1">${content.name}</label>
+                                    <input type="text" id="name" required class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-lime-500 focus:border-lime-500 transition duration-300 shadow-sm" placeholder="e.g., Senthil Kumar">
+                                </div>
+                                
+                                <!-- Mobile Number (Used for Login) -->
+                                <div class="mb-4">
+                                    <label for="mobile" class="block text-sm font-medium text-gray-600 mb-1">${content.register_mobile}</label>
+                                    <input type="tel" id="mobile" required class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-lime-500 focus:border-lime-500 transition duration-300 shadow-sm" 
+                                           placeholder="9999988888" value="${mobileValue}" ${isEditing ? 'disabled title="Mobile number cannot be changed after registration."' : ''}>
+                                    ${isEditing ? `<p class="text-xs text-red-500 mt-1">Mobile cannot be changed after registration.</p>` : ''}
+                                </div>
+                                
+                                <!-- Password -->
+                                <div class="mb-6">
+                                    <label for="password" class="block text-sm font-medium text-gray-600 mb-1">${content.register_pass}</label>
+                                    <input type="password" id="password" required class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-lime-500 focus:border-lime-500 transition duration-300 shadow-sm" 
+                                           placeholder="${content.register_pass_placeholder}" value="${passwordValue}">
+                                </div>
+
+                                <!-- Crop Type -->
+                                <div class="mb-4"><label for="cropType" class="block text-sm font-medium text-gray-600 mb-1">${content.crop_type}</label>
+                                    <select id="cropType" required class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-lime-500 focus:border-lime-500 transition duration-300 shadow-sm">
+                                        <option value="" disabled selected>${content.select_crop}</option>
+                                        ${CROP_OPTIONS.map(crop => `<option value="${crop}">${crop}</option>`).join('')}
+                                    </select>
+                                </div>
+                                
+                                <!-- Region -->
+                                <div class="mb-6"><label for="region" class="block text-sm font-medium text-gray-600 mb-1">${content.region}</label>
+                                    <select id="region" required class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-lime-500 focus:border-lime-500 transition duration-300 shadow-sm">
+                                        <option value="" disabled selected>${content.select_region}</option>
+                                        ${TN_DISTRICTS.map(region => `<option value="${region}">${region}</option>`).join('')}
+                                    </select>
+                                </div>
+                                
+                                <div id="marketPreview" class="mb-6"></div>
+                                
+                                <button type="submit" class="w-full bg-lime-600 hover:bg-lime-700 text-white font-bold py-3 rounded-xl transition duration-300 ease-in-out transform hover:scale-[1.01] shadow-md shadow-lime-300">
+                                    ${buttonText}
+                                </button>
+                                
+                                ${!isEditing ? 
+                                    `<button type="button" onclick="showLogin()" class="mt-4 w-full text-center text-sm text-gray-500 hover:text-gray-700 font-semibold transition duration-300">
+                                        Already have an account? Login here.
+                                    </button>` 
+                                    : ''}
+
+                            </form>
+                            <p class="mt-4 text-xs text-gray-400 text-center">${content.user_id}: ${currentMobile || 'N/A'}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Populate fields if editing
+            if (isEditing) {
+                document.getElementById('name').value = farmerData.name || '';
+                document.getElementById('cropType').value = farmerData.cropType || '';
+                document.getElementById('region').value = farmerData.region || '';
+                updatePricePreview();
+            }
+
+            document.getElementById('registrationForm').addEventListener('submit', handleRegistration);
+            document.getElementById('cropType').addEventListener('change', updatePricePreview);
+            document.getElementById('region').addEventListener('change', updatePricePreview);
+
+            applyLanguageSwitchListeners();
+        };
+
+        // --- Event Handlers (Consultation/Preview/Logout) ---
+        const handleConsultationRequest = async () => { 
+             showToast("Consultation request logged. An Agri-expert will contact you shortly!", 'success');
+        };
+        const updatePricePreview = () => { 
+             const cropType = document.getElementById('cropType').value;
+             const region = document.getElementById('region').value;
+             const previewDiv = document.getElementById('marketPreview');
+             const content = I18N[currentLang];
+
+             if (cropType && region) {
+                 const prices = generatePriceRange(cropType);
+                 previewDiv.innerHTML = `
+                     <div class="p-4 bg-lime-50 rounded-xl border-l-4 border-lime-500 shadow-inner">
+                         <p class="text-sm font-medium text-lime-800">${content.live_preview}</p>
+                         <p class="text-xs text-gray-500 mb-1">${content.live_price}</p>
+                         <p class="text-2xl font-bold text-lime-700">₹${prices.farmerMin} - ₹${prices.farmerMax}</p>
+                     </div>
+                 `;
+             } else {
+                 previewDiv.innerHTML = '';
+             }
+        };
+        const handleLogout = async () => {
+            try { 
+                // Clear local identity and force anonymous sign-out
+                localStorage.removeItem('agri_mobile');
+                currentMobile = null;
+                farmerData = null;
+                currentMarketData = null;
+                await signOut(auth); 
+                showToast(I18N[currentLang].logout_success, 'success'); 
+                // The onAuthStateChanged listener will call showLogin()
+            } 
+            catch (error) { 
+                console.error("Error signing out:", error); 
+                showToast("Logout failed.", 'error'); 
+            }
+        };
+
+        // --- Chart Drawing Logic & Language Listeners (Kept the same) ---
+        function drawChart(data) { 
+             const canvas = document.getElementById('priceChart');
+             if (!canvas) return;
+             // Set canvas size dynamically based on container size for responsiveness
+             const container = canvas.parentElement;
+             canvas.width = container.clientWidth;
+             canvas.height = container.clientHeight;
+
+             const ctx = canvas.getContext('2d');
+             
+             // Chart dimensions
+             const width = canvas.width;
+             const height = canvas.height;
+             const padding = 30;
+             const chartWidth = width - 2 * padding;
+             const chartHeight = height - 2 * padding;
+             
+             // Data processing
+             const prices = data.map(d => d.price);
+             const maxPrice = Math.max(...prices);
+             const minPrice = Math.min(...prices);
+             const range = maxPrice - minPrice;
+             const stepX = chartWidth / (data.length - 1);
+             
+             ctx.clearRect(0, 0, width, height);
+             
+             // Draw grid lines and labels
+             ctx.strokeStyle = '#e5e7eb';
+             ctx.lineWidth = 1;
+             ctx.fillStyle = '#6b7280';
+             ctx.font = '10px Inter';
+
+             for (let i = 0; i < 5; i++) {
+                 const y = padding + chartHeight * (i / 4);
+                 ctx.beginPath();
+                 ctx.moveTo(padding, y);
+                 ctx.lineTo(width - padding, y);
+                 ctx.stroke();
+                 
+                 const priceLabel = (maxPrice - (range * (i / 4))).toFixed(0);
+                 ctx.textAlign = 'right';
+                 ctx.fillText(`₹${priceLabel}`, padding - 5, y + 3);
+             }
+             
+             // Draw X-axis label
+             ctx.textAlign = 'center';
+             ctx.fillText('Days Ago (30 to 1)', width / 2, height - 5);
+             
+             // Draw the line graph
+             ctx.beginPath();
+             ctx.strokeStyle = '#22c55e'; /* Vibrant Green */
+             ctx.lineWidth = 3;
+             ctx.lineCap = 'round';
+             ctx.lineJoin = 'round';
+             
+             data.forEach((d, i) => {
+                 const x = padding + i * stepX;
+                 const y = padding + chartHeight * (1 - (d.price - minPrice) / range);
+                 if (i === 0) {
+                     ctx.moveTo(x, y);
+                 } else {
+                     ctx.lineTo(x, y);
+                 }
+             });
+             ctx.stroke();
+             
+             // Add points
+             ctx.fillStyle = '#16a34a'; /* Darker Green */
+             data.forEach((d, i) => {
+                 const x = padding + i * stepX;
+                 const y = padding + chartHeight * (1 - (d.price - minPrice) / range);
+                 ctx.beginPath();
+                 ctx.arc(x, y, 3, 0, 2 * Math.PI);
+                 ctx.fill();
+             });
+
+             // Add tooltip handler
+             canvas.onmousemove = (e) => {
+                 const rect = canvas.getBoundingClientRect();
+                 const mouseX = e.clientX - rect.left;
+                 
+                 let nearestIndex = -1;
+                 let minDistance = Infinity;
+
+                 data.forEach((d, i) => {
+                     const x = padding + i * stepX;
+                     const distance = Math.abs(mouseX - x);
+                     if (distance < minDistance) {
+                         minDistance = distance;
+                         nearestIndex = i;
+                     }
+                 });
+
+                 if (minDistance < stepX / 2 && nearestIndex !== -1) {
+                     const d = data[nearestIndex];
+                     
+                     const tooltip = document.getElementById('chartTooltip');
+                     tooltip.innerHTML = I18N[currentLang].chart_tooltip.replace('%d', data.length - nearestIndex).replace('%s', d.price.toFixed(2));
+                     
+                     // Position tooltip relative to the canvas container (using clientX/clientY)
+                     tooltip.style.left = `${e.clientX + 10}px`;
+                     tooltip.style.top = `${e.clientY - 30}px`;
+                     tooltip.classList.remove('hidden');
+                 } else {
+                     document.getElementById('chartTooltip').classList.add('hidden');
+                 }
+             };
+             canvas.onmouseleave = () => {
+                 document.getElementById('chartTooltip').classList.add('hidden');
+             };
+        }
+
+        const applyLanguageSwitchListeners = () => { 
+             // Logic handled by the switchLanguage function and re-rendering of components
+        };
+
+        // Expose functions globally for HTML events
+        window.switchLanguage = switchLanguage;
+        window.handleRegistration = handleRegistration;
+        window.handleLogout = handleLogout;
+        window.updatePricePreview = updatePricePreview;
+        window.handleConsultationRequest = handleConsultationRequest;
+        window.showView = showView; 
+        window.showLogin = showLogin; 
+        window.showRegistration = showRegistration;
+        window.handleDailyCheckIn = handleDailyCheckIn;
+        window.handleClaimCoins = handleClaimCoins;
+
+
+        // --- Application Entry Point ---
+        document.addEventListener('DOMContentLoaded', () => {
+            const toastContainer = document.createElement('div');
+            toastContainer.id = 'toastContainer';
+            document.body.appendChild(toastContainer);
+
+            initFirebase();
+        });
+
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body { 
+            font-family: 'Inter', sans-serif; 
+            margin: 0; 
+            padding: 0; 
+            background-color: #f9fafb; 
+        }
+        
+        /* General Fade/Slide In for Content Transitions */
+        @keyframes slideInFromLeft {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-slideIn { animation: slideInFromLeft 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .animate-fadeIn { animation: fadeIn 0.5s ease-out; }
+        .animate-spin { animation: spin 1s linear infinite; }
+
+        /* Toast Animation: Now positioned at the top */
+        .toast-enter { opacity: 0; transform: translateY(-100px) translateX(-50%); }
+        .toast-enter.toast-enter-active { opacity: 1; transform: translateY(0) translateX(-50%); }
+        .toast-exit { opacity: 1; }
+        .toast-exit-active { opacity: 0; transform: translateY(-100px) translateX(-50%); }
+        
+        /* Fixed Sidebar & Content Area Adjustments */
+        #sidebar {
+            /* Mobile width (w-16: 64px) */
+            width: 4rem; 
+        }
+        
+        #content-area {
+            /* Mobile margin-left (ml-16: 64px) */
+            margin-left: 4rem;
+            min-height: 100vh;
+        }
+
+        /* Desktop Overrides (lg:w-64: 256px) */
+        @media (min-width: 1024px) {
+            #sidebar {
+                width: 16rem; 
+            }
+            #content-area {
+                margin-left: 16rem; 
+            }
+        }
+        
+    </style>
+</head>
+<body>
+    <!-- Main Application Container -->
+    <div id="app-container" class="pt-0">
+        <div class="flex items-center justify-center min-h-screen bg-gray-50 p-4">
+            <h1 class="text-xl text-gray-500 animate-pulse">Loading App and Authenticating...</h1>
+        </div>
+    </div>
+    
+    <!-- Custom Chart Tooltip -->
+    <div id="chartTooltip" class="absolute hidden bg-gray-800 text-white text-xs p-2 rounded-lg shadow-lg pointer-events-none whitespace-nowrap z-40"></div>
+    
+    <!-- Custom Toast Notification Container -->
+    <div id="toastContainer" class="fixed top-0 left-0 w-full z-50 pointer-events-none pt-4"></div>
+</body>
+</html>
